@@ -4,6 +4,7 @@ import torch.distributed as dist
 from torch import nn
 import torch
 from torch.distributed.pipelining import pipeline, SplitPoint
+from torch.distributed.pipelining import ScheduleGPipe
 
 class Net(nn.Module):
     def __init__(self):
@@ -29,7 +30,7 @@ print(f"My rank is {RANK}")
 # first thing to do is to init RCP
 print("Waiting for all the nodes...")
 dist.init_process_group(
-    backend="nccl",
+    backend="gloo",
     rank=RANK,
     world_size=WORLD,
 )
@@ -51,15 +52,15 @@ print("num_stages", pipe.num_stages)
 print(f"stage {RANK}:")
 print(pipe.get_stage_module(0))
 
-stage = pipe.build_stage(RANK, device=torch.device("cuda"))
+stage = pipe.build_stage(RANK, device=torch.device("cpu"))
 
-schedule = ScheduleGPipe(stage)
+schedule = ScheduleGPipe(stage, 1)
 
 if RANK == 0:
-    schedule.step(x)
+    output = schedule.step(x)
+    print("output", output)
 else:
     output = schedule.step()
     print("output", output)
 
-rpc.shutdown()
 print("Bye!")
