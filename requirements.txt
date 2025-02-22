@@ -1,0 +1,6 @@
+# requirements.txt - CPU-only PyTorch
+
+packaging # missing dependency from PiPPy
+numpy
+--index-url https://download.pytorch.org/whl/cpu
+torch
