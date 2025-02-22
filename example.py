@@ -1,7 +1,9 @@
 import os
-import pippy
 from torch.distributed import rpc
+import torch.distributed as dist
 from torch import nn
+import torch
+from torch.distributed.pipelining import pipeline, SplitPoint
 
 class Net(nn.Module):
     def __init__(self):
@@ -19,41 +21,45 @@ class Net(nn.Module):
 net = Net()
 net.eval()
 
-
 RANK  = int(os.environ["RANK"])
 WORLD = int(os.environ["WORLD"])
-HOST  = os.environ["HOST"]
-PORT  = os.environ["PORT"]
 print(f"My rank is {RANK}")
 
 
 # first thing to do is to init RCP
 print("Waiting for all the nodes...")
-rpc.init_rpc(
-    f"worker{RANK}", # just an identifier
+dist.init_process_group(
+    backend="nccl",
     rank=RANK,
     world_size=WORLD,
-    rpc_backend_options=rpc.TensorPipeRpcBackendOptions(
-        num_worker_threads=8,
-        rpc_timeout=10, # seconds
-        init_method=f"tcp://{HOST}:{PORT}", # head node's address and port
-    )
 )
+
 
 # split the model, each process materializes its pipeline stage
-driver, stage = pippy.all_compile(
-    net,
-    num_ranks=WORLD,
-    num_chunks=WORLD, # microbatching
-    schedule="FillDrain", # feed chunks through the pipeline sequentially
-    split_policy=pippy.split_into_equal_size(WORLD), # split the model into specified number of equal-size stages
+x = torch.randn(4, 128)
+pipe = pipeline(
+    module=net,
+    mb_args=(x,),
+    split_spec={
+        "fc2": SplitPoint.BEGINNING,
+    }
 )
-print(stage)
 
-if rank == 0:
-    x = torch.randn(4, 128)
-    y = driver(x) # only rank 0 is able the call the pipeline's driver
-    print(y)
+print(pipe)
+print("num_stages", pipe.num_stages)
+
+print(f"stage {RANK}:")
+print(pipe.get_stage_module(0))
+
+stage = pipe.build_stage(RANK, device=torch.device("cuda"))
+
+schedule = ScheduleGPipe(stage)
+
+if RANK == 0:
+    schedule.step(x)
+else:
+    output = schedule.step()
+    print("output", output)
 
 rpc.shutdown()
 print("Bye!")
